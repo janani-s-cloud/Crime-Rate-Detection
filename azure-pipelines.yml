@@ -1,0 +1,34 @@
+# Azure Pipelines CI configuration for Crime Rate Detection (Flask + ML)
+
+trigger:
+  - main
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  pythonVersion: "3.10"
+
+steps:
+  # ── Step 1: Use correct Python version ──────────────────────────────────────
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: "$(pythonVersion)"
+      addToPath: true
+    displayName: "Set up Python $(pythonVersion)"
+
+  # ── Step 2: Install all project dependencies ─────────────────────────────────
+  - script: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt
+    displayName: "Install dependencies from requirements.txt"
+
+  # ── Step 3: Train ML models (generates .pkl files) ───────────────────────────
+  - script: |
+      python train_models.py
+    displayName: "Train ML models (generate .pkl files)"
+
+  # ── Step 4: Run pytest tests ─────────────────────────────────────────────────
+  - script: |
+      pytest test_predict.py -v --tb=short
+    displayName: "Run pytest tests"

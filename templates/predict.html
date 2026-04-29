@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+
+{% block title %}Predict Crime Rate - CrimePredict{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+{% endblock %}
+
+{% block content %}
+<!-- Main Container -->
+<div class="container mt-5">
+    <h2 class="text-center mb-4">Future Crime Rate Prediction</h2>
+
+    <div class="card shadow p-4">
+        <form action="/predict" method="post">
+
+            <div class="mb-3">
+                <label for="state" class="form-label">Select State</label>
+                <select class="form-control" id="state" name="state" required>
+                    <option value="">-- Select State --</option>
+                </select>
+            </div>
+
+            <div class="mb-3">
+                <label for="district" class="form-label">Select District</label>
+                <select class="form-control" id="district" name="district" required>
+                    <option value="">-- Select District --</option>
+                </select>
+            </div>
+
+            <div class="mb-3">
+                <label for="year" class="form-label">Enter Year</label>
+                <input type="number" class="form-control" name="year" placeholder="e.g. 2025" required min="2000"
+                    max="2100">
+            </div>
+
+            <button type="submit" class="btn btn-primary w-100">Predict</button>
+        </form>
+    </div>
+
+    {% if result %}
+    <div class="alert alert-danger mt-4 text-center">
+        <h4>{{ result }}</h4>
+    </div>
+    {% endif %}
+
+    {% if growth_result %}
+    <div class="mt-5">
+        <div class="alert alert-info text-center">
+            <h4>{{ growth_result }}</h4>
+        </div>
+
+        <h4 class="mt-4">Top 5 Predicted Crime Types (Percentage Share)</h4>
+        <table class="table table-bordered table-striped mt-2">
+            <thead class="table-dark">
+                <tr>
+                    <th>Crime Type</th>
+                    <th>Predicted Share (%)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in share_results %}
+                <tr>
+                    <td>{{ item.crime }}</td>
+                    <td>{{ item.percentage }}%</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const stateSelect = document.getElementById('state');
+        const districtSelect = document.getElementById('district');
+
+        // Load States
+        fetch('/api/states')
+            .then(response => response.json())
+            .then(data => {
+                data.forEach(state => {
+                    const option = document.createElement('option');
+                    option.value = state;
+                    option.textContent = state;
+                    stateSelect.appendChild(option);
+                });
+            })
+            .catch(error => console.error('Error loading states:', error));
+
+        // Load Districts on State Change
+        stateSelect.addEventListener('change', function () {
+            const state = this.value;
+
+            // Clear existing districts
+            districtSelect.innerHTML = '<option value="">-- Select District --</option>';
+
+            if (state) {
+                fetch(`/api/districts?state=${encodeURIComponent(state)}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        data.forEach(district => {
+                            const option = document.createElement('option');
+                            option.value = district;
+                            option.textContent = district;
+                            districtSelect.appendChild(option);
+                        });
+                    })
+                    .catch(error => console.error('Error loading districts:', error));
+            }
+        });
+    });
+</script>
+{% endblock %}

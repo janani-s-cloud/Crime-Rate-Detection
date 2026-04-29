@@ -157,7 +157,7 @@ def crime_data():
         }
         
         # Connect the lines: make the first projected point equal to the last historical point
-        response_data["projected"][len(yearly_crime)-1] = yearly_crime[crime_type].iloc[-1]
+        response_data["projected"][len(yearly_crime)-1] = float(yearly_crime[crime_type].iloc[-1])
         
         return jsonify(response_data)
     except Exception as e:

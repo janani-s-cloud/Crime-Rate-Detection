@@ -8,3 +8,7 @@ venv/
 dist/
 build/
 .DS_Store
+
+# Model files are too large for GitHub (>100MB) — regenerated in CI by train_models.py
+model/*.pkl
+crime_model.pkl

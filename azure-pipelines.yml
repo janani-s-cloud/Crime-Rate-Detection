@@ -1,4 +1,6 @@
 # Azure Pipelines CI configuration for Crime Rate Detection (Flask + ML)
+# Model .pkl files are NOT stored in Git (too large).
+# They are regenerated during the pipeline via train_models.py.
 
 trigger:
   - main
@@ -23,8 +25,9 @@ steps:
       pip install -r requirements.txt
     displayName: "Install dependencies from requirements.txt"
 
-  # ── Step 3: Train ML models (generates .pkl files) ───────────────────────────
+  # ── Step 3: Create model directory and train ML models ───────────────────────
   - script: |
+      mkdir -p model
       python train_models.py
     displayName: "Train ML models (generate .pkl files)"
 

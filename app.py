@@ -2,6 +2,20 @@ from flask import Flask, render_template, request, jsonify
 import pickle
 import numpy as np
 import pandas as pd
+import json
+
+
+def make_serializable(obj):
+    """Recursively convert numpy int64/float64 to native Python types."""
+    if isinstance(obj, list):
+        return [make_serializable(i) for i in obj]
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
 app = Flask(__name__)
 
@@ -149,11 +163,15 @@ def crime_data():
         future_years = np.arange(last_year + 1, 2026).reshape(-1, 1)
         future_predictions = model.predict(future_years)
         
-        # Format response
+        # Format response — convert all numpy types to native Python (int64 is not JSON serializable)
+        labels = [int(y) for y in yearly_crime["YEAR"].tolist()] + [int(y) for y in future_years.flatten().tolist()]
+        historical = [float(v) for v in yearly_crime[crime_type].tolist()] + [None] * len(future_years)
+        projected = [None] * len(yearly_crime) + [float(v) for v in future_predictions.tolist()]
+
         response_data = {
-            "labels": yearly_crime["YEAR"].tolist() + future_years.flatten().tolist(),
-            "historical": yearly_crime[crime_type].tolist() + [None] * len(future_years),
-            "projected": [None] * len(yearly_crime) + future_predictions.tolist()
+            "labels": labels,
+            "historical": historical,
+            "projected": projected
         }
         
         # Connect the lines: make the first projected point equal to the last historical point

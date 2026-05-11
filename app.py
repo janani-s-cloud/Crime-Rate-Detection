@@ -1,24 +1,63 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, make_response
 import pickle
 import numpy as np
 import pandas as pd
 import json
 
+# ---------------------------------------------------------------
+# Flask 2.2+ uses JSONProvider instead of app.json_encoder.
+# We override DefaultJSONProvider to handle numpy types globally.
+# ---------------------------------------------------------------
+try:
+    from flask.json.provider import DefaultJSONProvider
 
-class NumpyJSONEncoder(json.JSONEncoder):
-    """Custom JSON encoder that handles numpy int64/float64 and ndarray types."""
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return float(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super().default(obj)
+    class NumpyJSONProvider(DefaultJSONProvider):
+        def default(self, obj):
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return super().default(obj)
+
+    _has_provider = True
+except ImportError:
+    _has_provider = False
+
+
+def to_python(obj):
+    """Recursively convert numpy scalars/arrays to native Python types."""
+    if isinstance(obj, dict):
+        return {k: to_python(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_python(i) for i in obj]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
 
 app = Flask(__name__)
-app.json_encoder = NumpyJSONEncoder  # Apply globally — fixes ALL routes at once
+
+# Apply the correct encoder depending on Flask version
+if _has_provider:
+    app.json_provider_class = NumpyJSONProvider
+    app.json = NumpyJSONProvider(app)
+else:
+    # Flask < 2.2 fallback
+    import flask.json
+    app.json_encoder = type(
+        "NumpyJSONEncoder",
+        (flask.json.JSONEncoder,),
+        {"default": lambda self, o: int(o) if isinstance(o, np.integer)
+         else float(o) if isinstance(o, np.floating)
+         else o.tolist() if isinstance(o, np.ndarray)
+         else super(type(self), self).default(o)}
+    )
 
 
 # -----------------------------
@@ -179,8 +218,9 @@ def crime_data():
         
         # Connect the lines: make the first projected point equal to the last historical point
         response_data["projected"][len(yearly_crime)-1] = float(yearly_crime[crime_type].iloc[-1])
-        
-        return jsonify(response_data)
+
+        # to_python() guarantees no numpy types reach jsonify (Flask-version-agnostic)
+        return jsonify(to_python(response_data))
     except Exception as e:
         import traceback
         traceback.print_exc()

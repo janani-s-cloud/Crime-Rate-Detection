@@ -5,19 +5,21 @@ import pandas as pd
 import json
 
 
-def make_serializable(obj):
-    """Recursively convert numpy int64/float64 to native Python types."""
-    if isinstance(obj, list):
-        return [make_serializable(i) for i in obj]
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    return obj
+class NumpyJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles numpy int64/float64 and ndarray types."""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
 
 app = Flask(__name__)
+app.json_encoder = NumpyJSONEncoder  # Apply globally — fixes ALL routes at once
+
 
 # -----------------------------
 # Load Data
@@ -163,8 +165,9 @@ def crime_data():
         future_years = np.arange(last_year + 1, 2026).reshape(-1, 1)
         future_predictions = model.predict(future_years)
         
-        # Format response — convert all numpy types to native Python (int64 is not JSON serializable)
-        labels = [int(y) for y in yearly_crime["YEAR"].tolist()] + [int(y) for y in future_years.flatten().tolist()]
+        # Format response — NumpyJSONEncoder handles int64/float64 globally,
+        # but we also explicitly convert here for safety
+        labels = [int(yr) for yr in yearly_crime["YEAR"].tolist()] + [int(yr) for yr in future_years.flatten().tolist()]
         historical = [float(v) for v in yearly_crime[crime_type].tolist()] + [None] * len(future_years)
         projected = [None] * len(yearly_crime) + [float(v) for v in future_predictions.tolist()]
 

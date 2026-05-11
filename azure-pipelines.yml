@@ -19,19 +19,22 @@ steps:
       addToPath: true
     displayName: "Set up Python $(pythonVersion)"
 
-  # ── Step 2: Install all project dependencies ─────────────────────────────────
-  - script: |
-      python -m pip install --upgrade pip
-      pip install -r requirements.txt
+  # ── Step 2: Upgrade pip ───────────────────────────────────────────────────
+  - script: python -m pip install --upgrade pip
+    displayName: "Upgrade pip"
+
+  # ── Step 3: Install all project dependencies ─────────────────────────────────
+  - script: pip install -r requirements.txt
     displayName: "Install dependencies from requirements.txt"
 
-  # ── Step 3: Create model directory and train ML models ───────────────────────
+  # ── Step 4: Create model directory and train ML models ───────────────────────
   - script: |
       mkdir -p model
       python train_models.py
     displayName: "Train ML models (generate .pkl files)"
 
-  # ── Step 4: Run pytest tests ─────────────────────────────────────────────────
+  # ── Step 5: Run pytest tests ─────────────────────────────────────────────────
   - script: |
+      pip install pytest pytest-azurepipelines
       pytest test_predict.py -v --tb=short
     displayName: "Run pytest tests"

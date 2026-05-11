@@ -1,63 +1,39 @@
-from flask import Flask, render_template, request, jsonify, make_response
+from flask import Flask, render_template, request, Response
 import pickle
 import numpy as np
 import pandas as pd
 import json
 
+
 # ---------------------------------------------------------------
-# Flask 2.2+ uses JSONProvider instead of app.json_encoder.
-# We override DefaultJSONProvider to handle numpy types globally.
+# SAFE JSON HELPER — bypasses Flask's jsonify entirely.
+# Uses Python's own json.dumps with a custom encoder.
+# This is Flask-version-independent and 100% numpy-safe.
 # ---------------------------------------------------------------
-try:
-    from flask.json.provider import DefaultJSONProvider
-
-    class NumpyJSONProvider(DefaultJSONProvider):
-        def default(self, obj):
-            if isinstance(obj, np.integer):
-                return int(obj)
-            if isinstance(obj, np.floating):
-                return float(obj)
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            return super().default(obj)
-
-    _has_provider = True
-except ImportError:
-    _has_provider = False
+class _NumpyEncoder(json.JSONEncoder):
+    """Handles numpy int64/float64/bool/ndarray in json.dumps."""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
 
 
-def to_python(obj):
-    """Recursively convert numpy scalars/arrays to native Python types."""
-    if isinstance(obj, dict):
-        return {k: to_python(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [to_python(i) for i in obj]
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, np.floating):
-        return float(obj)
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    return obj
+def safe_json(data, status=200):
+    """Return a Flask Response with JSON-encoded data, numpy-safe."""
+    return Response(
+        json.dumps(data, cls=_NumpyEncoder),
+        status=status,
+        mimetype="application/json"
+    )
 
 
 app = Flask(__name__)
-
-# Apply the correct encoder depending on Flask version
-if _has_provider:
-    app.json_provider_class = NumpyJSONProvider
-    app.json = NumpyJSONProvider(app)
-else:
-    # Flask < 2.2 fallback
-    import flask.json
-    app.json_encoder = type(
-        "NumpyJSONEncoder",
-        (flask.json.JSONEncoder,),
-        {"default": lambda self, o: int(o) if isinstance(o, np.integer)
-         else float(o) if isinstance(o, np.floating)
-         else o.tolist() if isinstance(o, np.ndarray)
-         else super(type(self), self).default(o)}
-    )
 
 
 # -----------------------------
@@ -110,35 +86,31 @@ def predict():
         district = request.form["district"]
 
         # 1. Predict Growth Rate (Global Trend for now)
-        # In a real scenario, this should be state-specific
         growth_pred = growth_model.predict(np.array([[year]]))
         growth_rate = growth_pred[0]
 
         # 2. Predict Crime Share Percentages
-        # Encode inputs
         try:
             state_enc = le_state.transform([state])[0]
             district_enc = le_district.transform([district])[0]
         except ValueError:
             return render_template("predict.html", result="Error: Unknown State or District selected.")
 
-        # inputs: STATE_ENC, DISTRICT_ENC, YEAR
         X_share = np.array([[state_enc, district_enc, year]])
-        share_pred = share_model.predict(X_share)[0] # Array of percentages
+        share_pred = share_model.predict(X_share)[0]
 
         # Format Results
         growth_msg = f"Predicted Crime Growth Rate for {year}: {growth_rate:.2f}% (Global Trend)"
-        
+
         share_results = []
         for i, col in enumerate(crime_cols):
             share_results.append({
                 "crime": col,
-                "percentage": round(share_pred[i], 2)
+                "percentage": round(float(share_pred[i]), 2)
             })
-        
-        # Sort by highest percentage
+
         share_results.sort(key=lambda x: x["percentage"], reverse=True)
-        top_shares = share_results[:5] # Top 5 crimes
+        top_shares = share_results[:5]
 
         return render_template(
             "predict.html",
@@ -165,7 +137,7 @@ def analysis():
 @app.route("/api/crime_data")
 def crime_data():
     if df.empty:
-        return jsonify({"labels": [], "historical": [], "projected": []})
+        return safe_json({"labels": [], "historical": [], "projected": []})
 
     # Get filters
     state = request.args.get("state")
@@ -178,79 +150,83 @@ def crime_data():
         filtered_df = filtered_df[filtered_df["STATE/UT"] == state]
     if district:
         filtered_df = filtered_df[filtered_df["DISTRICT"] == district]
-    
+
     # Check if crime_type exists
     if crime_type not in filtered_df.columns:
         crime_type = "TOTAL IPC CRIMES"
-    
+
     try:
         # Aggregate crime per year
         yearly_crime = filtered_df.groupby("YEAR")[crime_type].sum().reset_index()
-        
+
         if yearly_crime.empty:
-            return jsonify({"labels": [], "historical": [], "projected": []})
+            return safe_json({"labels": [], "historical": [], "projected": []})
 
         # Prepare data for Linear Regression
-        X = yearly_crime["YEAR"].values.reshape(-1, 1)
-        y = yearly_crime[crime_type].values
-        
+        X_train = yearly_crime["YEAR"].values.reshape(-1, 1)
+        y_train = yearly_crime[crime_type].values
+
         # Train model
         from sklearn.linear_model import LinearRegression
         model = LinearRegression()
-        model.fit(X, y)
-        
+        model.fit(X_train, y_train)
+
         # Predict up to 2025
         last_year = int(yearly_crime["YEAR"].max())
         future_years = np.arange(last_year + 1, 2026).reshape(-1, 1)
         future_predictions = model.predict(future_years)
-        
-        # Format response — NumpyJSONEncoder handles int64/float64 globally,
-        # but we also explicitly convert here for safety
-        labels = [int(yr) for yr in yearly_crime["YEAR"].tolist()] + [int(yr) for yr in future_years.flatten().tolist()]
-        historical = [float(v) for v in yearly_crime[crime_type].tolist()] + [None] * len(future_years)
-        projected = [None] * len(yearly_crime) + [float(v) for v in future_predictions.tolist()]
 
-        response_data = {
-            "labels": labels,
+        # Build lists — all values explicitly cast to native Python types
+        hist_years  = [int(v)   for v in yearly_crime["YEAR"].tolist()]
+        fut_years   = [int(v)   for v in future_years.flatten().tolist()]
+        hist_values = [float(v) for v in yearly_crime[crime_type].tolist()]
+        fut_values  = [float(v) for v in future_predictions.tolist()]
+
+        labels    = hist_years + fut_years
+        historical = hist_values + [None] * len(fut_years)
+        projected  = [None] * len(hist_years) + fut_values
+
+        # Connect the lines at the boundary point
+        projected[len(hist_years) - 1] = hist_values[-1]
+
+        # safe_json uses _NumpyEncoder — handles any remaining numpy scalars
+        return safe_json({
+            "labels":     labels,
             "historical": historical,
-            "projected": projected
-        }
-        
-        # Connect the lines: make the first projected point equal to the last historical point
-        response_data["projected"][len(yearly_crime)-1] = float(yearly_crime[crime_type].iloc[-1])
+            "projected":  projected
+        })
 
-        # to_python() guarantees no numpy types reach jsonify (Flask-version-agnostic)
-        return jsonify(to_python(response_data))
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return safe_json({"error": str(e)}, status=500)
 
 # -----------------------------
 # API for Helper Data (States, Districts, Crime Types)
 # -----------------------------
 @app.route("/api/states")
 def get_states():
-    if df.empty: return jsonify([])
+    if df.empty:
+        return safe_json([])
     states = sorted(df["STATE/UT"].unique().tolist())
-    return jsonify(states)
+    return safe_json(states)
 
 @app.route("/api/districts")
 def get_districts():
     state = request.args.get("state")
-    if df.empty or not state: return jsonify([])
+    if df.empty or not state:
+        return safe_json([])
     districts = sorted(df[df["STATE/UT"] == state]["DISTRICT"].unique().tolist())
-    return jsonify(districts)
+    return safe_json(districts)
 
 @app.route("/api/crime_types")
 def get_crime_types():
-    if df.empty: return jsonify([])
-    # Exclude non-crime columns
+    if df.empty:
+        return safe_json([])
     ignore_cols = ["STATE/UT", "DISTRICT", "YEAR", "TOTAL IPC CRIMES", "index"]
     crime_types = [col for col in df.columns if col not in ignore_cols and "PERCENT" not in col]
-    # Add Total back at the top
     crime_types.insert(0, "TOTAL IPC CRIMES")
-    return jsonify(crime_types)
+    return safe_json(crime_types)
 
 # -----------------------------
 # Run app
